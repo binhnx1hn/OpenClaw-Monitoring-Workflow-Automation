@@ -12,122 +12,90 @@
 
 ---
 
-## Phase 1: Infrastructure & Docker Setup
+## ✅ Deployment Status (2026-04-06)
 
-### Step 1: System Update ✅ SSH Connected
+### Running Services
+| Container | Image | Status | Ports |
+|-----------|-------|--------|-------|
+| `openclaw_n8n` | `n8nio/n8n:latest` (v2.14.2) | ✅ Up | `0.0.0.0:5678->5678` |
+| `openclaw_postgres` | `postgres:15-alpine` | ✅ Up | `5432/tcp` (internal) |
+| `openclaw_minio` | `minio/minio:latest` | ✅ Up | `0.0.0.0:9000-9001->9000-9001` |
+
+### Access URLs
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| n8n Dashboard | https://213.160.77.197 | admin@openclaw.io / OpenClaw2024! |
+| n8n Direct | http://213.160.77.197:5678 | admin / OpenClaw2024! |
+| MinIO Console | http://213.160.77.197:9001 | minioadmin / MinioPass2024! |
+
+### Telegram Bot
+| Field | Value |
+|-------|-------|
+| Bot Name | OpenClaw Assistant Test |
+| Username | @OpenClawAssistantbinhtest_bot |
+| URL | t.me/OpenClawAssistantbinhtest_bot |
+| Token | 8787727906:AAEZWhJqmV53IR563jSoxJZTlc_4cM3Nx1M |
+| Webhook | https://213.160.77.197/webhook/openclaw-telegram |
+| n8n Credential ID | 8rvHrkiGjHElEu4f |
+| n8n Workflow ID | Ay4PiqO6lQVp8iy1 |
+| Status | ✅ Active |
+
+### Supported Bot Commands
+- `/start` - Welcome message
+- `/status` - Check system status
+- `/help` - List available commands
+
+### Technical Notes
+- Nginx reverse proxy với self-signed SSL cert cho HTTPS webhook
+- UFW Firewall: ports 22, 80, 443, 5678, 9000, 9001 open
+- Generic Webhook node dùng thay TelegramTrigger (tránh secret token validation issue)
+- Timezone: Europe/Berlin
+
+---
+
+## Phase 1: Infrastructure & Docker Setup ✅ COMPLETED
+
+### Step 1: System Update ✅
 ```bash
 apt update && apt upgrade -y
 apt install -y curl wget git nano ufw
 ```
 
-### Step 2: Install Docker
+### Step 2: Install Docker ✅
 ```bash
 curl -fsSL https://get.docker.com -o get-docker.sh
 sh get-docker.sh
 docker --version
 ```
 
-### Step 3: Install Docker Compose Plugin
+### Step 3: Install Docker Compose Plugin ✅
 ```bash
 apt install docker-compose-plugin -y
 docker compose version
 ```
 
-### Step 4: Configure Firewall
+### Step 4: Configure Firewall ✅
 ```bash
 ufw allow 22/tcp      # SSH
 ufw allow 80/tcp      # HTTP
 ufw allow 443/tcp     # HTTPS
 ufw allow 5678/tcp    # n8n (OpenClaw)
-ufw enable
+ufw allow 9000/tcp    # MinIO API
+ufw allow 9001/tcp    # MinIO Console
+ufw --force enable
 ufw status
 ```
 
-### Step 5: Create Directory Structure
+### Step 5: Create Directory Structure ✅
 ```bash
 mkdir -p /opt/openclaw/{n8n,postgres,minio,nginx}
 cd /opt/openclaw
 ```
 
-### Step 6: Create docker-compose.yml
-```bash
-cat > /opt/openclaw/docker-compose.yml << 'EOF'
-version: '3.8'
+### Step 6: docker-compose.yml ✅
+Location: `/opt/openclaw/docker-compose.yml`
 
-services:
-  # n8n - OpenClaw Workflow Engine
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: openclaw_n8n
-    restart: always
-    ports:
-      - "5678:5678"
-    environment:
-      - N8N_HOST=0.0.0.0
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=http
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=admin
-      - N8N_BASIC_AUTH_PASSWORD=OpenClaw2024!
-      - WEBHOOK_URL=http://213.160.77.197:5678/
-      - GENERIC_TIMEZONE=Europe/Berlin
-      - TZ=Europe/Berlin
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=n8n
-      - DB_POSTGRESDB_USER=n8n
-      - DB_POSTGRESDB_PASSWORD=n8npassword123!
-    volumes:
-      - n8n_data:/home/node/.n8n
-    depends_on:
-      - postgres
-    networks:
-      - openclaw_net
-
-  # PostgreSQL Database
-  postgres:
-    image: postgres:15-alpine
-    container_name: openclaw_postgres
-    restart: always
-    environment:
-      - POSTGRES_USER=n8n
-      - POSTGRES_PASSWORD=n8npassword123!
-      - POSTGRES_DB=n8n
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - openclaw_net
-
-  # MinIO - S3 Storage for documents/invoices
-  minio:
-    image: minio/minio:latest
-    container_name: openclaw_minio
-    restart: always
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=MinioPass2024!
-    volumes:
-      - minio_data:/data
-    command: server /data --console-address ":9001"
-    networks:
-      - openclaw_net
-
-volumes:
-  n8n_data:
-  postgres_data:
-  minio_data:
-
-networks:
-  openclaw_net:
-    driver: bridge
-EOF
-```
-
-### Step 7: Start All Services
+### Step 7: Start All Services ✅
 ```bash
 cd /opt/openclaw
 docker compose up -d
@@ -135,52 +103,40 @@ docker compose ps
 docker compose logs n8n --tail=50
 ```
 
-### Step 8: Verify Services Running
-```bash
-# Check n8n
-curl -I http://localhost:5678
-# Expected: HTTP/1.1 200 OK or 401
+---
 
-# Check MinIO
-curl -I http://localhost:9001
-# Expected: HTTP/1.1 200 OK
+## Phase 2: Telegram Integration ✅ COMPLETED
+
+### Telegram Credential (n8n)
+- **Credential ID**: `8rvHrkiGjHElEu4f`
+- **Name**: OpenClaw Telegram Bot
+- **Type**: telegramApi
+- Created via n8n API: `POST /api/v1/credentials`
+
+### Webhook Workflow
+- **Workflow ID**: `Ay4PiqO6lQVp8iy1`
+- **Webhook URL**: `https://213.160.77.197/webhook/openclaw-telegram`
+- **Flow**: Webhook Trigger → Process Message (Code) → Send Reply (Telegram)
+- **Status**: ✅ Active
+
+### Telegram Webhook Registration
+```bash
+curl -X POST "https://api.telegram.org/bot8787727906:AAEZWhJqmV53IR563jSoxJZTlc_4cM3Nx1M/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://213.160.77.197/webhook/openclaw-telegram"}'
 ```
 
 ---
 
-## Phase 2: Access URLs
+## Phase 3: OCR Demo (Invoice Processing) 🔄 IN PROGRESS
 
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| n8n Dashboard | http://213.160.77.197:5678 | admin / OpenClaw2024! |
-| MinIO Console | http://213.160.77.197:9001 | minioadmin / MinioPass2024! |
-
----
-
-## Phase 3: Telegram Bot Integration
-
-### Prerequisites from Client
-- [ ] Telegram Bot Token (create via @BotFather)
-- [ ] Telegram Chat ID or Group ID
-
-### Setup Steps in n8n
-1. Login to n8n dashboard: http://213.160.77.197:5678
-2. Go to **Credentials** → Add New → **Telegram**
-3. Enter Bot Token
-4. Create workflow: **Telegram Trigger** → Process → **Telegram Send Message**
-5. Test: Send message to bot → n8n receives and responds
-
----
-
-## Phase 4: OCR Demo (Invoice Processing)
-
-### Requirements from Client
-- [ ] Sample invoices (PDF or images)
-- [ ] Claude API key (for OpenClaude vision extraction)
+### Requirements
+- [ ] Sample invoices (PDF or images) from client
+- [ ] Claude API key (for vision-based extraction)
 
 ### n8n Workflow Design
 ```
-Email Trigger / Webhook
+Webhook / Email Trigger
     ↓
 Download Attachment (PDF/Image)
     ↓
@@ -197,13 +153,13 @@ Send Telegram notification with extracted data
 
 ---
 
-## Phase 5: Full Project Roadmap
+## Phase 4: Full Project Roadmap
 
-### Milestone 1 - Phase 1 (€250) ✅ In Progress
+### Milestone 1 - Phase 1 (€250) ✅ COMPLETED
 - [x] Server provisioned
-- [ ] Docker + n8n + PostgreSQL + MinIO running
-- [ ] Telegram bot connected
-- [ ] OCR demo: invoice → structured data
+- [x] Docker + n8n + PostgreSQL + MinIO running
+- [x] Telegram bot connected and active
+- [ ] OCR demo: invoice → structured data (in progress)
 
 ### Milestone 2 - Email Intake + OCR Pipeline
 - [ ] IMAP email integration (port 587/465)
@@ -248,3 +204,5 @@ Send Telegram notification with extracted data
 - **SSH access**: `ssh root@213.160.77.197` (password: Catherine110!)
 - **Change root password** after initial setup complete
 - **Enable backup** in hosting panel for production use
+- **SSL**: Self-signed cert currently, upgrade to Let's Encrypt for production
+- **Clone cost**: €50 per additional server deployment

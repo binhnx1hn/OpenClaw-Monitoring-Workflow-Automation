@@ -1,0 +1,128 @@
+{
+  "name": "OCR Invoice Demo",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ocr-demo",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-ocr-001",
+      "name": "Webhook OCR",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "ocr-demo"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Nhận input từ webhook body\nconst body = $input.first().json.body || $input.first().json;\nconst imageUrl = body.image_url || '';\nconst imageBase64 = body.image_base64 || '';\nconst filename = body.filename || 'invoice_' + Date.now() + '.pdf';\nconst chatId = body.chat_id || null;\n\nreturn [{\n  json: {\n    imageUrl,\n    imageBase64,\n    filename,\n    chatId,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "prepare-req-001",
+      "name": "Prepare Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Mock Claude Vision API response - demo extracted invoice data\nconst input = $input.first().json;\nconst filename = input.filename || 'unknown';\nconst imageUrl = input.imageUrl || '';\nconst chatId = input.chatId || null;\n\n// Mock extracted invoice data\nconst mockExtractedData = {\n  vendor_name: 'Cong ty TNHH OpenClaw Technology',\n  vendor_address: '123 Duong Nguyen Hue, Quan 1, TP.HCM',\n  invoice_number: 'INV-' + Math.floor(Math.random() * 90000 + 10000),\n  invoice_date: '2026-04-06',\n  due_date: '2026-05-06',\n  line_items: [\n    {\n      description: 'Dich vu tu van cong nghe thang 4/2026',\n      quantity: 1,\n      unit_price: 5000000,\n      total: 5000000\n    },\n    {\n      description: 'Phi ban quyen phan mem',\n      quantity: 3,\n      unit_price: 1000000,\n      total: 3000000\n    }\n  ],\n  subtotal: 8000000,\n  vat_rate: 10,\n  vat_amount: 800000,\n  total_amount: 8800000,\n  currency: 'VND',\n  payment_terms: 'Net 30 days'\n};\n\n// Format Telegram message\nconst tgMessage = '\\u{1F9FE} *Invoice Extracted (OCR Demo)*\\n\\n' +\n  '\\u{1F4E6} Vendor: ' + mockExtractedData.vendor_name + '\\n' +\n  '\\u{1F522} Invoice#: ' + mockExtractedData.invoice_number + '\\n' +\n  '\\u{1F4C5} Date: ' + mockExtractedData.invoice_date + '\\n' +\n  '\\u{1F4B0} Total: ' + mockExtractedData.total_amount.toLocaleString() + ' ' + mockExtractedData.currency + '\\n' +\n  '\\u{1F3F7} VAT: ' + mockExtractedData.vat_amount.toLocaleString() + ' (' + mockExtractedData.vat_rate + '%)\\n' +\n  '\\u{1F4CB} Due: ' + mockExtractedData.due_date + '\\n' +\n  '\\u{1F4CE} File: ' + filename + '\\n' +\n  '\\u{1F310} Source: ' + (imageUrl ? imageUrl.substring(0, 50) + '...' : 'N/A');\n\nreturn [{\n  json: {\n    extractedData: mockExtractedData,\n    tgMessage,\n    filename,\n    imageUrl,\n    chatId,\n    success: true,\n    note: 'MOCK DATA - Claude API not configured'\n  }\n}];"
+      },
+      "id": "mock-claude-001",
+      "name": "Mock Claude OCR",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chatId || '' }}",
+        "text": "={{ $json.tgMessage }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-send-001",
+      "name": "Telegram Notify",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [910, 300],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "telegramApi": {
+          "id": "8rvHrkiGjHElEu4f",
+          "name": "OpenClaw Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({success: $('Mock Claude OCR').first().json.success || false, data: $('Mock Claude OCR').first().json.extractedData || {}, note: $('Mock Claude OCR').first().json.note || '', telegram_status: ($('Mock Claude OCR').first().json.chatId ? 'attempted' : 'skipped_no_chat_id')}) }}",
+        "options": {}
+      },
+      "id": "respond-webhook-001",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1130, 300]
+    }
+  ],
+  "connections": {
+    "Webhook OCR": {
+      "main": [
+        [
+          {
+            "node": "Prepare Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Request": {
+      "main": [
+        [
+          {
+            "node": "Mock Claude OCR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mock Claude OCR": {
+      "main": [
+        [
+          {
+            "node": "Telegram Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Notify": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null
+}
