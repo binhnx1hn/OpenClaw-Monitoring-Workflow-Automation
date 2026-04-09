@@ -4,10 +4,11 @@
     {
       "parameters": {
         "mailbox": "INBOX",
+        "postProcessAction": "read",
         "options": {
           "allowUnauthorizedCerts": false,
           "downloadAttachments": true,
-          "forceReconnect": 60
+          "forceReconnect": 5
         }
       },
       "id": "imap-trigger-01",

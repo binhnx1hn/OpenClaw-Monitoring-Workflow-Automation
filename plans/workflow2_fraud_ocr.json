@@ -117,9 +117,28 @@
     {
       "parameters": {
         "chatId": "6190676114",
-        "text": "=⚠️ *Suspicious Invoice Detected*\n\nVendor: {{ $('IBAN Fraud Check').first().json.vendor_name }}\nIBAN: `{{ $('IBAN Fraud Check').first().json.iban }}`\nAmount: {{ $('IBAN Fraud Check').first().json.total_amount }} {{ $('IBAN Fraud Check').first().json.currency }}\nInvoice#: {{ $('IBAN Fraud Check').first().json.invoice_number }}\nFrom: {{ $('IBAN Fraud Check').first().json.email_from }}\nReason: {{ $('IBAN Fraud Check').first().json.fraud_reason }}\n\nDB ID: {{ $json.id }}\n\nReply:\n`ACCEPT_{{ $json.id }}` to process\n`REJECT_{{ $json.id }}` to mark as spam",
+        "text": "=⚠️ *Invoice cần xem xét*\n\nVendor: {{ $('IBAN Fraud Check').first().json.vendor_name }}\nIBAN: {{ $('IBAN Fraud Check').first().json.iban || '(không có)' }}\nAmount: {{ $('IBAN Fraud Check').first().json.total_amount }} {{ $('IBAN Fraud Check').first().json.currency }}\nInvoice#: {{ $('IBAN Fraud Check').first().json.invoice_number }}\nFrom: {{ $('IBAN Fraud Check').first().json.email_from }}\nReason: {{ $('IBAN Fraud Check').first().json.fraud_reason }}\n\nDB ID: {{ $json.id }}\n\n👇 Chọn hành động bên dưới hoặc nhập lệnh:\nACCEPT\\_{{ $json.id }} hoặc REJECT\\_{{ $json.id }}",
+        "replyMarkup": "replyKeyboard",
+        "replyKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {"text": "=ACCEPT_{{ $json.id }}"},
+                  {"text": "=REJECT_{{ $json.id }}"}
+                ]
+              }
+            }
+          ]
+        },
+        "replyKeyboardOptions": {
+          "one_time_keyboard": true,
+          "resize_keyboard": true,
+          "selective": false
+        },
         "additionalFields": {
-          "parse_mode": "Markdown"
+          "parse_mode": "Markdown",
+          "appendAttribution": false
         }
       },
       "id": "telegram-alert-01",
@@ -169,7 +188,8 @@
         "chatId": "6190676114",
         "text": "=✅ *Invoice Processed Successfully*\n\nVendor: {{ $('IBAN Fraud Check').first().json.vendor_name }}\nInvoice#: {{ $('IBAN Fraud Check').first().json.invoice_number }}\nAmount: {{ $('IBAN Fraud Check').first().json.total_amount }} {{ $('IBAN Fraud Check').first().json.currency }}\nIBAN: `{{ $('IBAN Fraud Check').first().json.iban }}`\nDB ID: {{ $json.id }}\nStatus: Approved ✓",
         "additionalFields": {
-          "parse_mode": "Markdown"
+          "parse_mode": "Markdown",
+          "appendAttribution": false
         }
       },
       "id": "telegram-success-01",

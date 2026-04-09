@@ -258,7 +258,7 @@ services:
       - "9001:9001"   # Web Console
     environment:
       MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin123
+      MINIO_ROOT_PASSWORD: MinioPass2024!
     volumes:
       - ./minio/data:/data
     command: server /data --console-address ":9001"
@@ -705,7 +705,7 @@ Send `/start` to your bot in Telegram. You should see the update logged and rece
 
 Open browser: `http://SERVER_IP:9001`
 - **Username**: `minioadmin`
-- **Password**: `minioadmin123`
+- **Password**: `MinioPass2024!`
 
 ### 5.2 Create Buckets via Web Console
 
@@ -722,7 +722,7 @@ chmod +x mc
 mv mc /usr/local/bin/mc
 
 # Configure mc alias
-mc alias set openclaw http://localhost:9000 minioadmin minioadmin123
+mc alias set openclaw http://localhost:9000 minioadmin MinioPass2024!
 
 # Create buckets
 mc mb openclaw/invoices
@@ -743,7 +743,7 @@ mc ls openclaw
 4. Fill in:
    - **Credential Name**: `OpenClaw MinIO`
    - **Access Key ID**: `minioadmin`
-   - **Secret Access Key**: `minioadmin123`
+   - **Secret Access Key**: `MinioPass2024!`
    - **Region**: `us-east-1`
    - **Custom Endpoint**: `http://openclaw-minio:9000`
    - **Force Path Style**: ✓ Enabled
@@ -1049,7 +1049,7 @@ docker exec openclaw-postgres pg_dump -U n8n n8n > /opt/openclaw/backups/n8n-db-
 | Service | Username | Password |
 |---------|----------|---------|
 | n8n | `admin@openclaw.io` | `OpenClaw2024!` |
-| MinIO | `minioadmin` | `minioadmin123` |
+| MinIO | `minioadmin` | `MinioPass2024!` |
 | PostgreSQL | `n8n` | `n8n_password_2024` |
 
 > ⚠️ **Security Note**: Change all default passwords in production environments!
