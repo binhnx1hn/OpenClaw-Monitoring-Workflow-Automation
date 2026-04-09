@@ -1,0 +1,204 @@
+{
+  "name": "Invoice Email Intake",
+  "nodes": [
+    {
+      "parameters": {
+        "mailbox": "INBOX",
+        "options": {
+          "allowUnauthorizedCerts": false,
+          "downloadAttachments": true,
+          "forceReconnect": 60
+        }
+      },
+      "id": "imap-trigger-01",
+      "name": "IMAP Email Trigger",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "credentials": {
+        "imap": {
+          "id": "1kb0hizYeMC3mjK8",
+          "name": "Hahn Fleisch Invoice Email"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract email metadata and attachments\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const emailData = item.json;\n  const attachments = item.binary || {};\n  \n  // Get attachment keys\n  const attachmentKeys = Object.keys(attachments);\n  \n  if (attachmentKeys.length === 0) {\n    // No attachments - still log the email\n    results.push({\n      json: {\n        has_attachment: false,\n        email_from: emailData.from || '',\n        email_subject: emailData.subject || '',\n        email_date: emailData.date || new Date().toISOString(),\n        filename: null,\n        attachment_key: null,\n        mime_type: null\n      }\n    });\n    continue;\n  }\n  \n  // Process each attachment\n  for (const key of attachmentKeys) {\n    const attachment = attachments[key];\n    const mimeType = attachment.mimeType || '';\n    const filename = attachment.fileName || attachment.fileExtension || key;\n    \n    // Only process PDF and image files\n    const isPDF = mimeType.includes('pdf') || filename.toLowerCase().endsWith('.pdf');\n    const isImage = mimeType.includes('image') || \n                    filename.toLowerCase().match(/\\.(jpg|jpeg|png|tiff|tif|gif|bmp)$/);\n    \n    if (isPDF || isImage) {\n      results.push({\n        json: {\n          has_attachment: true,\n          email_from: emailData.from || '',\n          email_subject: emailData.subject || '',\n          email_date: emailData.date || new Date().toISOString(),\n          filename: filename,\n          attachment_key: key,\n          mime_type: mimeType\n        },\n        binary: {\n          attachment_data: attachments[key]\n        }\n      });\n    }\n  }\n}\n\nif (results.length === 0) {\n  return [{ json: { skipped: true, reason: 'No PDF/image attachments found' } }];\n}\n\nreturn results;"
+      },
+      "id": "code-extract-01",
+      "name": "Extract Attachments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-has-attachment",
+              "leftValue": "={{ $json.has_attachment }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-has-attachment-01",
+      "name": "Has Attachment?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "invoices",
+        "fileName": "={{ 'invoices/' + $now.toFormat('yyyy-MM-dd') + '/' + $json.filename }}",
+        "binaryPropertyName": "attachment_data",
+        "additionalFields": {
+          "contentType": "={{ $json.mime_type }}"
+        }
+      },
+      "id": "minio-upload-01",
+      "name": "Upload to MinIO",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [900, 200],
+      "credentials": {
+        "s3": {
+          "id": "minio-cred",
+          "name": "MinIO"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/invoice-process",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "filename",
+              "value": "={{ $json.filename }}"
+            },
+            {
+              "name": "minio_path",
+              "value": "={{ 'invoices/' + $now.toFormat('yyyy-MM-dd') + '/' + $json.filename }}"
+            },
+            {
+              "name": "source",
+              "value": "email"
+            },
+            {
+              "name": "email_from",
+              "value": "={{ $json.email_from }}"
+            },
+            {
+              "name": "email_subject",
+              "value": "={{ $json.email_subject }}"
+            },
+            {
+              "name": "mime_type",
+              "value": "={{ $json.mime_type }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "http-forward-01",
+      "name": "Forward to Fraud Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 200]
+    }
+  ],
+  "connections": {
+    "IMAP Email Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Attachments": {
+      "main": [
+        [
+          {
+            "node": "Has Attachment?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Attachment?": {
+      "main": [
+        [
+          {
+            "node": "Upload to MinIO",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Upload to MinIO": {
+      "main": [
+        [
+          {
+            "node": "Forward to Fraud Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "tags": [
+    {
+      "name": "invoice",
+      "createdAt": "2026-04-08T10:00:00.000Z",
+      "updatedAt": "2026-04-08T10:00:00.000Z"
+    }
+  ]
+}

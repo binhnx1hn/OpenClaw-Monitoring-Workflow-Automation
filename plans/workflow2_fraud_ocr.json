@@ -1,0 +1,238 @@
+{
+  "name": "Invoice Fraud Check & OCR",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "invoice-process",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger-01",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "invoice-process"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pre-check and prepare data for Claude OCR\nconst body = $input.first().json.body || $input.first().json;\n\nconst filename = body.filename || 'unknown.jpg';\nconst minioPath = body.minio_path || '';\nconst emailFrom = body.email_from || '';\nconst emailSubject = body.email_subject || '';\nconst source = body.source || 'manual';\nconst mimeType = body.mime_type || 'image/jpeg';\nconst base64Data = body.base64_data || '';\n\n// Generate unique invoice processing ID\nconst processingId = 'inv_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);\n\nreturn [{\n  json: {\n    processing_id: processingId,\n    filename: filename,\n    minio_path: minioPath,\n    email_from: emailFrom,\n    email_subject: emailSubject,\n    source: source,\n    mime_type: mimeType,\n    base64_data: base64Data,\n    has_base64: base64Data.length > 0\n  }\n}];"
+      },
+      "id": "code-precheck-01",
+      "name": "Fraud Pre-check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_ANTHROPIC_API_KEY_HERE"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-3-5-sonnet-20241022\",\n  \"max_tokens\": 2048,\n  \"messages\": [{\n    \"role\": \"user\",\n    \"content\": [\n      {\n        \"type\": \"text\",\n        \"text\": \"Extract all data from this invoice and return as JSON with these fields: vendor_name, vendor_address, vendor_tax_id, invoice_number, invoice_date, due_date, iban, bic, line_items (array of {description, quantity, unit_price, total}), subtotal, vat_rate, vat_amount, total_amount, currency, payment_terms, invoice_type (set to 'customer' if vendor is 'Hahn Fleischhandel OHG', otherwise 'supplier'). Return ONLY valid JSON, no markdown, no explanation.\"\n      },\n      {\n        \"type\": \"image\",\n        \"source\": {\n          \"type\": \"base64\",\n          \"media_type\": \"{{ $json.mime_type || 'image/jpeg' }}\",\n          \"data\": \"{{ $json.base64_data || 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' }}\"\n        }\n      }\n    ]\n  }]\n}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "claude-ocr-01",
+      "name": "Claude Vision OCR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Claude response and extract invoice data\nconst preCheckData = $('Fraud Pre-check').first().json;\nconst claudeResponse = $input.first().json;\n\nlet invoiceData = {};\nlet parseError = null;\n\ntry {\n  // Claude returns content[0].text\n  const content = claudeResponse.content;\n  if (content && content[0] && content[0].text) {\n    let rawText = content[0].text.trim();\n    // Remove markdown code blocks if present\n    rawText = rawText.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n    invoiceData = JSON.parse(rawText);\n  } else if (claudeResponse.error) {\n    parseError = claudeResponse.error.message || 'Claude API error';\n    // Fallback data when Claude fails\n    invoiceData = {\n      vendor_name: 'Unknown',\n      invoice_number: 'UNKNOWN-' + Date.now(),\n      invoice_date: new Date().toISOString().split('T')[0],\n      iban: '',\n      bic: '',\n      total_amount: 0,\n      vat_amount: 0,\n      vat_rate: 0,\n      currency: 'EUR',\n      invoice_type: 'supplier'\n    };\n  }\n} catch (e) {\n  parseError = 'JSON parse error: ' + e.message;\n  invoiceData = {\n    vendor_name: 'Parse Error',\n    invoice_number: 'ERR-' + Date.now(),\n    invoice_date: new Date().toISOString().split('T')[0],\n    iban: '',\n    bic: '',\n    total_amount: 0,\n    vat_amount: 0,\n    vat_rate: 0,\n    currency: 'EUR',\n    invoice_type: 'supplier'\n  };\n}\n\n// IBAN Fraud Check Logic\nconst iban = (invoiceData.iban || '').trim().replace(/\\s/g, '');\nlet fraudStatus = 'pending';\nlet fraudReason = '';\n\nif (!iban || iban === '') {\n  fraudStatus = 'no_iban';\n  fraudReason = 'No IBAN found in invoice';\n} else if (iban.toUpperCase().startsWith('DE')) {\n  fraudStatus = 'approved';\n  fraudReason = 'German IBAN - OK';\n} else {\n  fraudStatus = 'suspicious';\n  fraudReason = 'Non-German IBAN detected: ' + iban;\n}\n\nreturn [{\n  json: {\n    processing_id: preCheckData.processing_id,\n    filename: preCheckData.filename,\n    minio_path: preCheckData.minio_path,\n    email_from: preCheckData.email_from,\n    email_subject: preCheckData.email_subject,\n    source: preCheckData.source,\n    // Invoice data from Claude\n    vendor_name: invoiceData.vendor_name || '',\n    vendor_address: invoiceData.vendor_address || '',\n    vendor_tax_id: invoiceData.vendor_tax_id || '',\n    invoice_number: invoiceData.invoice_number || '',\n    invoice_date: invoiceData.invoice_date || null,\n    due_date: invoiceData.due_date || null,\n    iban: iban,\n    bic: invoiceData.bic || '',\n    total_amount: parseFloat(invoiceData.total_amount) || 0,\n    vat_amount: parseFloat(invoiceData.vat_amount) || 0,\n    vat_rate: parseFloat(invoiceData.vat_rate) || 0,\n    currency: invoiceData.currency || 'EUR',\n    invoice_type: invoiceData.invoice_type || 'supplier',\n    line_items: JSON.stringify(invoiceData.line_items || []),\n    // Fraud check result\n    fraud_status: fraudStatus,\n    fraud_reason: fraudReason,\n    parse_error: parseError,\n    raw_ocr_data: JSON.stringify(invoiceData)\n  }\n}];"
+      },
+      "id": "code-fraud-check-01",
+      "name": "IBAN Fraud Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [
+            {
+              "id": "cond-suspicious",
+              "leftValue": "={{ $json.fraud_status }}",
+              "rightValue": "approved",
+              "operator": {"type": "string", "operation": "notEquals"}
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-suspicious-01",
+      "name": "Is Suspicious?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO invoices (source, email_subject, email_from, filename, minio_path, vendor_name, vendor_address, vendor_tax_id, invoice_number, invoice_date, due_date, iban, bic, total_amount, vat_amount, vat_rate, currency, invoice_type, fraud_status, status, raw_ocr_data) VALUES ('{{ $json.source }}', '{{ $json.email_subject }}', '{{ $json.email_from }}', '{{ $json.filename }}', '{{ $json.minio_path }}', '{{ $json.vendor_name }}', '{{ $json.vendor_address }}', '{{ $json.vendor_tax_id }}', '{{ $json.invoice_number }}', {{ $json.invoice_date ? \"'\" + $json.invoice_date + \"'\" : 'NULL' }}, {{ $json.due_date ? \"'\" + $json.due_date + \"'\" : 'NULL' }}, '{{ $json.iban }}', '{{ $json.bic }}', {{ $json.total_amount }}, {{ $json.vat_amount }}, {{ $json.vat_rate }}, '{{ $json.currency }}', '{{ $json.invoice_type }}', '{{ $json.fraud_status }}', 'pending_review', '{{ $json.raw_ocr_data }}'::jsonb) RETURNING id",
+        "additionalFields": {}
+      },
+      "id": "pg-insert-suspicious-01",
+      "name": "Save Suspicious to DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1340, 160],
+      "credentials": {
+        "postgres": {
+          "id": "i9CQuAV9bkpSqu7Q",
+          "name": "OpenClaw PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "6190676114",
+        "text": "=⚠️ *Suspicious Invoice Detected*\n\nVendor: {{ $('IBAN Fraud Check').first().json.vendor_name }}\nIBAN: `{{ $('IBAN Fraud Check').first().json.iban }}`\nAmount: {{ $('IBAN Fraud Check').first().json.total_amount }} {{ $('IBAN Fraud Check').first().json.currency }}\nInvoice#: {{ $('IBAN Fraud Check').first().json.invoice_number }}\nFrom: {{ $('IBAN Fraud Check').first().json.email_from }}\nReason: {{ $('IBAN Fraud Check').first().json.fraud_reason }}\n\nDB ID: {{ $json.id }}\n\nReply:\n`ACCEPT_{{ $json.id }}` to process\n`REJECT_{{ $json.id }}` to mark as spam",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-alert-01",
+      "name": "Telegram Fraud Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1560, 160],
+      "credentials": {
+        "telegramApi": {
+          "id": "8rvHrkiGjHElEu4f",
+          "name": "OpenClaw Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"pending_review\", \"message\": \"Invoice flagged for fraud review\", \"invoice_id\": {{ $('Save Suspicious to DB').first().json.id }}, \"fraud_status\": \"{{ $('IBAN Fraud Check').first().json.fraud_status }}\", \"reason\": \"{{ $('IBAN Fraud Check').first().json.fraud_reason }}\" }",
+        "options": {}
+      },
+      "id": "respond-suspicious-01",
+      "name": "Respond Suspicious",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1780, 160]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO invoices (source, email_subject, email_from, filename, minio_path, vendor_name, vendor_address, vendor_tax_id, invoice_number, invoice_date, due_date, iban, bic, total_amount, vat_amount, vat_rate, currency, invoice_type, fraud_status, status, raw_ocr_data) VALUES ('{{ $json.source }}', '{{ $json.email_subject }}', '{{ $json.email_from }}', '{{ $json.filename }}', '{{ $json.minio_path }}', '{{ $json.vendor_name }}', '{{ $json.vendor_address }}', '{{ $json.vendor_tax_id }}', '{{ $json.invoice_number }}', {{ $json.invoice_date ? \"'\" + $json.invoice_date + \"'\" : 'NULL' }}, {{ $json.due_date ? \"'\" + $json.due_date + \"'\" : 'NULL' }}, '{{ $json.iban }}', '{{ $json.bic }}', {{ $json.total_amount }}, {{ $json.vat_amount }}, {{ $json.vat_rate }}, '{{ $json.currency }}', '{{ $json.invoice_type }}', 'approved', 'approved', '{{ $json.raw_ocr_data }}'::jsonb) RETURNING id",
+        "additionalFields": {}
+      },
+      "id": "pg-insert-approved-01",
+      "name": "Save Approved to DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1340, 440],
+      "credentials": {
+        "postgres": {
+          "id": "i9CQuAV9bkpSqu7Q",
+          "name": "OpenClaw PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "6190676114",
+        "text": "=✅ *Invoice Processed Successfully*\n\nVendor: {{ $('IBAN Fraud Check').first().json.vendor_name }}\nInvoice#: {{ $('IBAN Fraud Check').first().json.invoice_number }}\nAmount: {{ $('IBAN Fraud Check').first().json.total_amount }} {{ $('IBAN Fraud Check').first().json.currency }}\nIBAN: `{{ $('IBAN Fraud Check').first().json.iban }}`\nDB ID: {{ $json.id }}\nStatus: Approved ✓",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-success-01",
+      "name": "Telegram Success",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1560, 440],
+      "credentials": {
+        "telegramApi": {
+          "id": "8rvHrkiGjHElEu4f",
+          "name": "OpenClaw Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"approved\", \"message\": \"Invoice processed successfully\", \"invoice_id\": {{ $('Save Approved to DB').first().json.id }}, \"vendor_name\": \"{{ $('IBAN Fraud Check').first().json.vendor_name }}\", \"invoice_number\": \"{{ $('IBAN Fraud Check').first().json.invoice_number }}\", \"total_amount\": {{ $('IBAN Fraud Check').first().json.total_amount }}, \"currency\": \"{{ $('IBAN Fraud Check').first().json.currency }}\" }",
+        "options": {}
+      },
+      "id": "respond-approved-01",
+      "name": "Respond Approved",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1780, 440]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{"node": "Fraud Pre-check", "type": "main", "index": 0}]]
+    },
+    "Fraud Pre-check": {
+      "main": [[{"node": "Claude Vision OCR", "type": "main", "index": 0}]]
+    },
+    "Claude Vision OCR": {
+      "main": [[{"node": "IBAN Fraud Check", "type": "main", "index": 0}]]
+    },
+    "IBAN Fraud Check": {
+      "main": [[{"node": "Is Suspicious?", "type": "main", "index": 0}]]
+    },
+    "Is Suspicious?": {
+      "main": [
+        [{"node": "Save Suspicious to DB", "type": "main", "index": 0}],
+        [{"node": "Save Approved to DB", "type": "main", "index": 0}]
+      ]
+    },
+    "Save Suspicious to DB": {
+      "main": [[{"node": "Telegram Fraud Alert", "type": "main", "index": 0}]]
+    },
+    "Telegram Fraud Alert": {
+      "main": [[{"node": "Respond Suspicious", "type": "main", "index": 0}]]
+    },
+    "Save Approved to DB": {
+      "main": [[{"node": "Telegram Success", "type": "main", "index": 0}]]
+    },
+    "Telegram Success": {
+      "main": [[{"node": "Respond Approved", "type": "main", "index": 0}]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

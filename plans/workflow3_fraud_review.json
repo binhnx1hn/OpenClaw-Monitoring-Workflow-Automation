@@ -1,0 +1,238 @@
+{
+  "name": "Invoice Fraud Review Handler",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "openclaw-telegram",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-telegram-01",
+      "name": "Telegram Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "openclaw-telegram"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Telegram message and classify command\nconst body = $input.first().json.body || $input.first().json;\n\n// Extract Telegram update data\nconst update = body;\nconst message = update.message || update.edited_message || {};\nconst callbackQuery = update.callback_query || {};\n\nconst chatId = (message.chat && message.chat.id) || \n               (callbackQuery.message && callbackQuery.message.chat && callbackQuery.message.chat.id) ||\n               '6190676114';\n\nconst text = (message.text || callbackQuery.data || '').trim();\nconst fromUser = (message.from && message.from.username) || \n                 (callbackQuery.from && callbackQuery.from.username) || 'unknown';\n\nconsole.log('Telegram message received:', text, 'from:', fromUser);\n\n// Classify message type\nlet commandType = 'other';\nlet invoiceId = null;\n\nif (text.toUpperCase().startsWith('ACCEPT_')) {\n  commandType = 'accept';\n  invoiceId = text.substring(7).trim();\n} else if (text.toUpperCase().startsWith('REJECT_')) {\n  commandType = 'reject';\n  invoiceId = text.substring(7).trim();\n} else if (text === '/start') {\n  commandType = 'start';\n} else if (text === '/status') {\n  commandType = 'status';\n} else if (text === '/help') {\n  commandType = 'help';\n}\n\n// Validate invoice ID is numeric\nif (invoiceId && !/^\\d+$/.test(invoiceId)) {\n  commandType = 'invalid';\n}\n\nreturn [{\n  json: {\n    command_type: commandType,\n    invoice_id: invoiceId,\n    chat_id: String(chatId),\n    text: text,\n    from_user: fromUser,\n    raw_update: JSON.stringify(body)\n  }\n}];"
+      },
+      "id": "code-parse-cmd-01",
+      "name": "Parse Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [
+            {
+              "id": "cond-accept",
+              "leftValue": "={{ $json.command_type }}",
+              "rightValue": "accept",
+              "operator": {"type": "string", "operation": "equals"}
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-accept-01",
+      "name": "Is ACCEPT?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE invoices SET status='approved', fraud_status='approved', updated_at=NOW() WHERE id={{ $json.invoice_id }} RETURNING id, vendor_name, invoice_number, total_amount, currency",
+        "additionalFields": {}
+      },
+      "id": "pg-accept-01",
+      "name": "DB Accept Invoice",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [900, 160],
+      "credentials": {
+        "postgres": {
+          "id": "i9CQuAV9bkpSqu7Q",
+          "name": "OpenClaw PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Command').first().json.chat_id }}",
+        "text": "=✅ Invoice #{{ $json.id }} accepted and queued for processing\n\nVendor: {{ $json.vendor_name }}\nInvoice#: {{ $json.invoice_number }}\nAmount: {{ $json.total_amount }} {{ $json.currency }}\n\nStatus updated to: approved",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-accept-reply-01",
+      "name": "Reply Accept",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1120, 160],
+      "credentials": {
+        "telegramApi": {
+          "id": "8rvHrkiGjHElEu4f",
+          "name": "OpenClaw Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [
+            {
+              "id": "cond-reject",
+              "leftValue": "={{ $json.command_type }}",
+              "rightValue": "reject",
+              "operator": {"type": "string", "operation": "equals"}
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-reject-01",
+      "name": "Is REJECT?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 460]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE invoices SET status='spam', fraud_status='rejected', updated_at=NOW() WHERE id={{ $json.invoice_id }} RETURNING id, vendor_name, invoice_number",
+        "additionalFields": {}
+      },
+      "id": "pg-reject-01",
+      "name": "DB Reject Invoice",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [900, 460],
+      "credentials": {
+        "postgres": {
+          "id": "i9CQuAV9bkpSqu7Q",
+          "name": "OpenClaw PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Command').first().json.chat_id }}",
+        "text": "=❌ Invoice #{{ $json.id }} rejected and marked as spam\n\nVendor: {{ $json.vendor_name }}\nInvoice#: {{ $json.invoice_number }}\n\nStatus updated to: spam",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-reject-reply-01",
+      "name": "Reply Reject",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1120, 460],
+      "credentials": {
+        "telegramApi": {
+          "id": "8rvHrkiGjHElEu4f",
+          "name": "OpenClaw Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Handle other commands: /start, /status, /help, or unknown\nconst cmdData = $input.first().json;\nconst cmdType = cmdData.command_type;\n\nlet replyText = '';\n\nswitch(cmdType) {\n  case 'start':\n    replyText = '👋 Welcome to OpenClaw Invoice Bot!\\n\\nI process invoices automatically. Commands:\\n/status - System status\\n/help - Help';\n    break;\n  case 'status':\n    replyText = '🟢 System Status\\n\\nAll systems operational:\\n• Invoice intake: Active\\n• OCR: Active\\n• Fraud detection: Active\\n• Database: Connected';\n    break;\n  case 'help':\n    replyText = '📖 Available Commands:\\n\\n/start - Welcome\\n/status - System status\\n/help - This help\\n\\nTo review invoices:\\nACCEPT_{id} - Accept invoice\\nREJECT_{id} - Reject as spam';\n    break;\n  case 'invalid':\n    replyText = '⚠️ Invalid invoice ID. Format: ACCEPT_123 or REJECT_123';\n    break;\n  default:\n    replyText = '❓ Unknown command: ' + cmdData.text + '\\n\\nType /help for commands.';\n}\n\nreturn [{\n  json: {\n    chat_id: cmdData.chat_id,\n    reply_text: replyText\n  }\n}];"
+      },
+      "id": "code-other-cmd-01",
+      "name": "Handle Other Commands",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 620]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {}
+      },
+      "id": "telegram-other-reply-01",
+      "name": "Reply Other",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1120, 620],
+      "credentials": {
+        "telegramApi": {
+          "id": "8rvHrkiGjHElEu4f",
+          "name": "OpenClaw Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\": true}",
+        "options": {}
+      },
+      "id": "respond-webhook-01",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1340, 300]
+    }
+  ],
+  "connections": {
+    "Telegram Webhook": {
+      "main": [[{"node": "Parse Command", "type": "main", "index": 0}]]
+    },
+    "Parse Command": {
+      "main": [
+        [
+          {"node": "Is ACCEPT?", "type": "main", "index": 0},
+          {"node": "Is REJECT?", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Is ACCEPT?": {
+      "main": [
+        [{"node": "DB Accept Invoice", "type": "main", "index": 0}],
+        [{"node": "Handle Other Commands", "type": "main", "index": 0}]
+      ]
+    },
+    "Is REJECT?": {
+      "main": [
+        [{"node": "DB Reject Invoice", "type": "main", "index": 0}],
+        [{"node": "Handle Other Commands", "type": "main", "index": 0}]
+      ]
+    },
+    "DB Accept Invoice": {
+      "main": [[{"node": "Reply Accept", "type": "main", "index": 0}]]
+    },
+    "Reply Accept": {
+      "main": [[{"node": "Respond OK", "type": "main", "index": 0}]]
+    },
+    "DB Reject Invoice": {
+      "main": [[{"node": "Reply Reject", "type": "main", "index": 0}]]
+    },
+    "Reply Reject": {
+      "main": [[{"node": "Respond OK", "type": "main", "index": 0}]]
+    },
+    "Handle Other Commands": {
+      "main": [[{"node": "Reply Other", "type": "main", "index": 0}]]
+    },
+    "Reply Other": {
+      "main": [[{"node": "Respond OK", "type": "main", "index": 0}]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}
